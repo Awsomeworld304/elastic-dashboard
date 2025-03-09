@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,53 @@ import 'package:elastic_dashboard/widgets/custom_loading_indicator.dart';
 import 'package:elastic_dashboard/widgets/dialog_widgets/dialog_text_input.dart';
 import 'package:elastic_dashboard/widgets/mjpeg.dart';
 import 'package:elastic_dashboard/widgets/nt_widgets/nt_widget.dart';
+
+class UpStatus {
+  final bool isUp;
+  final DateTime timestamp;
+  const UpStatus(this.isUp, this.timestamp);
+}
+
+class Pling {
+  final String url;
+  final Duration interval;
+  const Pling({
+    required this.url,
+    required this.interval,
+  });
+  Stream<UpStatus> checkIfUp() =>
+      Stream.periodic(interval, (_) => DateTime.now()).asyncExpand(
+        (now) => HttpClient()
+            .headUrl(Uri.parse(url))
+            .then((req) => req..followRedirects = false)
+            .then((req) => req.close())
+            .then((resp) => resp.statusCode)
+            .then((statusCode) => statusCode == 200)
+            .onError((error, stackTrace) => false)
+            .then((isUp) => UpStatus(isUp, now))
+            .asStream(),
+      );
+}
+
+const oneSecond = Duration(seconds: 1);
+
+extension IsOrIsNot on bool {
+  String get isOrIsNot => this ? 'is' : 'is not';
+}
+
+Future<bool> testURL(String url) async {
+  final pling = Pling(
+    url: url,
+    interval: oneSecond,
+  );
+  await for (final upStatus in pling.checkIfUp()) {
+    final timestamp = upStatus.timestamp;
+    final isUpStr = upStatus.isUp.isOrIsNot;
+    print('$url $isUpStr up at $timestamp');
+    return upStatus.isUp;
+  }
+  return false;
+}
 
 class CameraStreamModel extends MultiTopicNTWidgetModel {
   @override
@@ -317,6 +366,11 @@ class CameraStreamWidget extends NTWidget {
   Widget build(BuildContext context) {
     CameraStreamModel model = cast(context.watch<NTWidgetModel>());
 
+    if (model.controller?.errorState != null && model.controller?.errorState.value == null) {
+      // Stream address is null, so cycle.
+      print("CAMERA STREAM ERROR -> Address is invalid?");
+    }
+
     return ListenableBuilder(
       listenable: Listenable.merge([
         model.streamsSubscription,
@@ -333,6 +387,21 @@ class CameraStreamWidget extends NTWidget {
               !stream.startsWith('mjpg:')) {
             continue;
           }
+
+          
+          //String curStream = stream.substring('mjpg:'.length);
+
+          /*
+          testURL(curStream).then((value) {
+            if (value) {
+              streams.add(curStream);
+              print("CAMERA -> ADDR VALID!");
+            } else {
+              streams.remove(curStream);
+              print("CAMERA -> ADDR NOT VALID! " + curStream);
+            }
+          });
+          */
 
           streams.add(stream.substring('mjpg:'.length));
         }
@@ -369,7 +438,7 @@ class CameraStreamWidget extends NTWidget {
 
         bool createNewWidget = model.controller == null;
 
-        String stream = model.getUrlWithParameters(streams.last);
+        String stream = model.getUrlWithParameters(streams.first);
 
         createNewWidget =
             createNewWidget || (model.controller?.stream != stream);
